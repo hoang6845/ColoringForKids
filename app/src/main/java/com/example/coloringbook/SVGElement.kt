@@ -16,6 +16,7 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.graphics.toColorInt
+import androidx.core.graphics.withClip
 import androidx.core.graphics.withTranslation
 import com.caverock.androidsvg.SVG
 import kotlinx.coroutines.CoroutineScope
@@ -54,12 +55,19 @@ data class DashSamplePoint(
     var hit: Boolean = false
 )
 
+data class DrawStroke(
+    val regionId: String,
+    val color: String,
+    val path: Path
+)
+
 data class StepProgress(
     val stepId: String,
     val dashStepId: String,
     var isCompleted: Boolean = false,
-    val drawnPath: MutableMap<String, Path> = mutableMapOf(),
-    var clippedDrawnPath: MutableMap<String, Path> = mutableMapOf(),
+    val drawnPath: MutableList<DrawStroke>,
+//    var clippedDrawnPath: ,
+//    var clippedDrawnPath: MutableMap<String, Path> = mutableMapOf(),
     var progress: Float = 0f,
     var dashPoints: MutableList<DashSamplePoint> = mutableListOf()
 )
@@ -68,7 +76,7 @@ data class StepProgress(
 data class ColoringProgress(
     val coloringId: String,
     val stepId: String,
-    var drawnPaths: MutableMap<String, Path> = mutableMapOf(),
+    var drawnPaths: MutableList<DrawStroke>,
     var isCompleted: Boolean = false
 )
 
@@ -90,6 +98,7 @@ class SVGColoringView @JvmOverloads constructor(
     private val stepProgressMap = mutableMapOf<String, StepProgress>()
     private val coloringProgressMap = mutableMapOf<String, ColoringProgress>()
     private var currentStepIndex = 0
+    private var currentStroke: DrawStroke? = null
     private var scaleBegin = 1f
     private var scaleFactor = 1f
     private var offsetX = 0f
@@ -133,7 +142,7 @@ class SVGColoringView @JvmOverloads constructor(
     private val userDrawPaint = Paint().apply {
         color = Color.BLACK
         style = Paint.Style.STROKE
-        strokeWidth = 20f
+        strokeWidth = 24f
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
         isAntiAlias = true
@@ -703,13 +712,15 @@ class SVGColoringView @JvmOverloads constructor(
             coloringProgressMap[coloringElement.id] = ColoringProgress(
                 coloringId = coloringElement.id,
                 stepId = stepId,
+                mutableListOf()
             )
 
             stepProgressMap[stepId] = StepProgress(
                 stepId = stepId,
                 dashStepId = dashStepId,
                 dashPoints = dashPoints,
-                isCompleted = false
+                isCompleted = false,
+                drawnPath = mutableListOf()
             )
 //            stepProgressMap[stepId] = StepProgress(
 //                stepId = stepId,
@@ -787,13 +798,13 @@ class SVGColoringView @JvmOverloads constructor(
                 canvas.drawPath(stepElement.path, stepFillPaint)
 
                 val completedProgress = stepProgressMap[stepElement.id]
-                if (completedProgress != null && !completedProgress.clippedDrawnPath.isEmpty()) {
+                if (completedProgress != null && !completedProgress.drawnPath.isEmpty()) {
                     canvas.save()
                     canvas.clipPath(stepElement.path)
-                    Log.d("check", "drawStepMode: ${completedProgress.clippedDrawnPath}")
-                    for (i in completedProgress.clippedDrawnPath) {
-                        userDrawPaint.color = i.key.toColorInt()
-                        canvas.drawPath(i.value, userDrawPaint)
+                    Log.d("check", "drawStepMode: ${completedProgress.drawnPath}")
+                    for (i in completedProgress.drawnPath) {
+                        userDrawPaint.color = i.color.toColorInt()
+                        canvas.drawPath(i.path, userDrawPaint)
                     }
                     canvas.restore()
                 }
@@ -826,25 +837,18 @@ class SVGColoringView @JvmOverloads constructor(
                 if (!progress.drawnPath.isEmpty()) {
                     canvas.save()
                     canvas.clipPath(currentStepElement.path)
-                    for (i in progress.drawnPath) {
-                        userDrawPaint.color = i.key.toColorInt()
-                        canvas.drawPath(i.value, userDrawPaint)
+                    progress.drawnPath.forEach { i ->
+                        userDrawPaint.color = i.color.toColorInt()
+                        canvas.drawPath(i.path, userDrawPaint)
                     }
-
                     canvas.restore()
                 }
             }
         }
     }
 
-    private fun clipDrawnPathToStepRegion(stepElement: SVGElement, progress: StepProgress) {
-        progress.clippedDrawnPath[currentSelectedColor] =
-            Path(progress.drawnPath[currentSelectedColor])
-    }
-
     private fun drawColoringMode(canvas: Canvas) {
         coloringElements.forEach { element ->
-
             val coloringElement = mapStepElements[element.id]
             if (coloringElement == null) {
                 Log.d("check draw", "drawColoringMode: null")
@@ -852,32 +856,27 @@ class SVGColoringView @JvmOverloads constructor(
             }
             val progressColoring = coloringProgressMap[coloringElement.id]
             if (progressColoring != null && !progressColoring.drawnPaths.isEmpty()) {
-                canvas.save()
-                canvas.clipPath(coloringElement.path)
-                progressColoring.drawnPaths.forEach { (color, path) ->
-                    userDrawPaint.color = color.toColorInt()
-                    canvas.drawPath(path, userDrawPaint)
+                canvas.withClip(coloringElement.path) {
+                    progressColoring.drawnPaths.forEach { it ->
+                        userDrawPaint.color = it.color.toColorInt()
+                        drawPath(it.path, userDrawPaint)
+                    }
                 }
-
-                canvas.restore()
             } else {
                 fillPaint.color = "#ffffff".toColorInt()
                 canvas.drawPath(element.path, fillPaint)
             }
 
-
             val stepElement = mapStepElements["step_${element.id}"]
             if (stepElement == null) return@forEach
             val progress = stepProgressMap[stepElement.id]
-            if (progress != null && !progress.clippedDrawnPath.isEmpty()) {
-                canvas.save()
-                canvas.clipPath(stepElement.path)
-                progress.clippedDrawnPath.forEach { (color, path) ->
-                    userDrawPaint.color = color.toColorInt()
-                    canvas.drawPath(path, userDrawPaint)
+            if (progress != null && !progress.drawnPath.isEmpty()) {
+                canvas.withClip(stepElement.path) {
+                    progress.drawnPath.forEach { it ->
+                        userDrawPaint.color = it.color.toColorInt()
+                        drawPath(it.path, userDrawPaint)
+                    }
                 }
-
-                canvas.restore()
             }
         }
     }
@@ -894,7 +893,6 @@ class SVGColoringView @JvmOverloads constructor(
         if (currentStepIndex >= stepElements.size) {
             return false
         }
-
         val currentStep = stepElements[currentStepIndex]
         val progress = stepProgressMap[currentStep.id] ?: return false
         val transformedX = (event.x - offsetX) / (scaleFactor * scaleBegin)
@@ -903,23 +901,29 @@ class SVGColoringView @JvmOverloads constructor(
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 isDrawing = true
-                val path = progress.drawnPath.getOrPut(currentSelectedColor) {
-                    Path()
+                val path = Path().apply {
+                    moveTo(transformedX, transformedY)
+                    addCircle(
+                        transformedX,
+                        transformedY,
+                        userDrawPaint.strokeWidth / 2f,
+                        Path.Direction.CW
+                    )
                 }
-                path.moveTo(transformedX, transformedY)
+                currentStroke =
+                    DrawStroke(regionId = currentStep.id, color = currentSelectedColor, path = path)
+                currentStroke?.let { progress.drawnPath.add(it) }
                 return true
             }
 
             MotionEvent.ACTION_MOVE -> {
                 if (isDrawing) {
-                    progress.drawnPath[currentSelectedColor]?.let { path ->
-                        path.lineTo(transformedX, transformedY)
-                    }
+                    val path = currentStroke?.path
+                    path?.lineTo(transformedX, transformedY)
                     val dashElement = dashStepElements.find { it.id == progress.dashStepId }
                     if (dashElement != null) {
                         updateDashPointHit(progress, transformedX, transformedY, 16f)
                     }
-
                     invalidate()
                 }
                 return true
@@ -927,17 +931,16 @@ class SVGColoringView @JvmOverloads constructor(
 
             MotionEvent.ACTION_UP -> {
                 isDrawing = false
+                currentStroke = null
                 Log.d("check progress", "handleStepTouch: ${progress.progress}")
-                clipDrawnPathToStepRegion(currentStep, progress)
+//                clipDrawnPathToStepRegion(currentStep, progress)
                 if (progress.progress >= 0.95f) {
                     completeCurrentStep()
                 }
-
                 invalidate()
                 return true
             }
         }
-
         return false
     }
 
@@ -954,17 +957,24 @@ class SVGColoringView @JvmOverloads constructor(
 
                         val coloringProgress = coloringProgressMap[element.id]
                         if (coloringProgress != null) {
-                            val colorPath =
-                                coloringProgress.drawnPaths.getOrPut(currentSelectedColor) {
-                                    Path()
-                                }
-                            colorPath.moveTo(transformedX, transformedY)
-                            colorPath.addCircle(
-                                transformedX,
-                                transformedY,
-                                userDrawPaint.strokeWidth / 2f,
-                                Path.Direction.CW
+                            val colorPath = Path().apply {
+                                moveTo(transformedX, transformedY)
+                                addCircle(
+                                    transformedX,
+                                    transformedY,
+                                    userDrawPaint.strokeWidth / 2f,
+                                    Path.Direction.CW
+                                )
+                            }
+                            currentStroke = DrawStroke(
+                                regionId = element.id,
+                                color = currentSelectedColor,
+                                path = colorPath
                             )
+                            currentStroke?.let {
+                                coloringProgress.drawnPaths.add(it)
+                            }
+
                         }
                         return true
                     }
@@ -978,7 +988,8 @@ class SVGColoringView @JvmOverloads constructor(
                     val coloringProgress = coloringProgressMap[element.id]
 
                     if (coloringProgress != null) {
-                        val colorPath = coloringProgress.drawnPaths[currentSelectedColor]
+//                        val colorPath = coloringProgress.drawnPaths[currentSelectedColor]
+                        val colorPath = currentStroke?.path
                         if (colorPath != null) {
                             colorPath.lineTo(transformedX, transformedY)
                             invalidate()
@@ -991,6 +1002,7 @@ class SVGColoringView @JvmOverloads constructor(
             MotionEvent.ACTION_UP -> {
                 isDrawing = false
                 currentColoringElement = null
+                currentStroke = null
                 invalidate()
                 return true
             }
@@ -1113,14 +1125,12 @@ class SVGColoringView @JvmOverloads constructor(
 
     fun setStepStrokeWidth(width: Float) {
         stepStrokeWidth = width
-        // Regenerate steps nếu cần
         autoGenerateStepsFromColoring()
         invalidate()
     }
 
 }
 
-// Helper class nếu chưa có
 class PathParser {
     fun parsePath(pathData: String): Path {
         val path = Path()
